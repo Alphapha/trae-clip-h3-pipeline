@@ -1,0 +1,13 @@
+# 隐私配置与密钥
+.env
+
+# 运行日志
+logs/
+
+# 生成产物（体积大，按需本地保留）
+video/*.mp4
+video/shots/
+video/_qc/
+__pycache__/
+*.pyc
+.DS_Store
