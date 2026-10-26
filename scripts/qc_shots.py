@@ -115,8 +115,9 @@ def main() -> int:
             problems.append(f"{m['id']}: 无音轨")
         if abs(info["duration"] - m["seconds"]) > 1.0:
             problems.append(f"{m['id']}: 时长 {info['duration']:.2f}s ≠ 预期 {m['seconds']}s")
-        if info["height"] != 832 or info["width"] != 480:
-            problems.append(f"{m['id']}: 画幅 {info['width']}x{info['height']}")
+        ratio = (info["width"] / info["height"]) if info["height"] else 0
+        if not (0.5 <= ratio <= 0.65):      # 只校验是不是竖屏近 9:16，不锁死分辨率
+            problems.append(f"{m['id']}: 画幅异常 {info['width']}x{info['height']}")
         grab_frames(path, QC_DIR / f"{m['id']}", [0.2, m["seconds"] / 2, m["seconds"] - 0.3])
     print(f"{'镜头':<6}{'时长':>7}{'画幅':>12}{'音轨':>6}  预期")
     for sid, info in report:

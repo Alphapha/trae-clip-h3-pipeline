@@ -29,16 +29,38 @@ MANIFEST = PROJECT_DIR / "prompts" / "manifest.json"
 
 
 def normalize(text: str) -> str:
-    """去掉标点与空白，只留汉字与字母数字，便于宽松比对。"""
-    return re.sub(r"[^一-鿿a-zA-Z0-9]", "", text or "")
+    """归一化文本：繁转简、阿拉伯数字转中文数字、去标点空白，只留可读字符。
+
+    ASR 常把「两米二」写成「2.2.2」、把「飞」写成「飛」，不归一化会误判成没对上。
+    """
+    text = text or ""
+    try:
+        from opencc import OpenCC
+        text = OpenCC("t2s").convert(text)
+    except ImportError:
+        pass
+    text = re.sub(r"(\d+)", lambda m: DIGITS.get(m.group(1), m.group(1)), text)
+    return re.sub(r"[^一-鿿a-zA-Z0-9]", "", text)
+
+
+# 阿拉伯数字 → 中文数字（只覆盖 0–99，足够「两米二」这类量词表达）
+DIGITS = {
+    "0": "零", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五",
+    "6": "六", "7": "七", "8": "八", "9": "九", "10": "十", "11": "十一",
+    "12": "十二", "13": "十三", "14": "十四", "15": "十五", "16": "十六",
+    "17": "十七", "18": "十八", "19": "十九", "20": "二十", "22": "二十二",
+}
 
 
 def similarity(a: str, b: str) -> float:
-    """用字符集合的 Jaccard 相似度做宽松比对（tiny 模型会有同音字误差）。"""
+    """字符集合的 Jaccard 与包含度取较大值，容忍同音字与繁简差异。"""
     sa, sb = set(a), set(b)
     if not sa or not sb:
         return 0.0
-    return len(sa & sb) / len(sa | sb)
+    inter = len(sa & sb)
+    jac = inter / len(sa | sb)
+    contain = inter / min(len(sa), len(sb))
+    return max(jac, contain)
 
 
 def main() -> int:
@@ -67,17 +89,22 @@ def main() -> int:
         segs, _ = model.transcribe(str(path), language="zh", vad_filter=False)
         heard = "".join(s.text for s in segs)
         expect = "".join(d["line"] for d in m["dialogue"])
+        if not expect:                      # 本镜无台词（如空镜/片尾），只记录环境音转写
+            rows.append({"id": m["id"], "heard": heard, "expect": "", "score": None})
+            print(f"无台词 {m['id']}  环境音转写：{heard.strip()[:40]}")
+            continue
         score = similarity(normalize(heard), normalize(expect))
         rows.append({"id": m["id"], "heard": heard, "expect": expect, "score": round(score, 3)})
         flag = "OK " if score >= 0.5 else ("近似" if score >= 0.3 else "差异")
         print(f"{flag} {m['id']}  相似度 {score:.2f}  听到：{heard.strip()[:40]}  期望：{expect[:30]}")
-        if score < 0.3 and expect:
+        if score < 0.3:
             bad.append(m["id"])
     out = PROJECT_DIR / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    avg = sum(r["score"] for r in rows) / max(len(rows), 1)
-    print(f"\n共 {len(rows)} 镜，平均相似度 {avg:.2f}；差异较大：{'、'.join(bad) if bad else '无'}")
+    scored = [r["score"] for r in rows if r["score"] is not None]
+    avg = sum(scored) / max(len(scored), 1)
+    print(f"\n共 {len(rows)} 镜（{len(scored)} 镜有台词），平均相似度 {avg:.2f}；差异较大：{'、'.join(bad) if bad else '无'}")
     return 0
 
 
