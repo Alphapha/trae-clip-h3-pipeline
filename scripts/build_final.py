@@ -124,11 +124,14 @@ def main() -> int:
     fade_start = max(args.target - 2.0, 0.5)
     filters = (f"[0:v]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
                f"crop={OUT_W}:{OUT_H},fps={FPS},format=yuv420p,fade=t=out:st={fade_start}:d=2[v];")
+    # 音频：叠底噪 → 响度标准化（短剧常见响度 -16 LUFS）→ 结尾淡出
+    audio_chain = "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st={:.1f}:d=3".format(max(args.target - 3.0, 0.5))
     if not args.no_ambience:
         filters += ("[1:a]atrim=0:{:.2f},volume=1.0[bg];[0:a]volume=1.0[main];"
-                    "[main][bg]amix=inputs=2:duration=first:dropout_transition=0[a]").format(args.target)
+                    "[main][bg]amix=inputs=2:duration=first:dropout_transition=0,{}"
+                    "[a]").format(args.target, audio_chain)
     else:
-        filters += "[0:a]volume=1.0[a]"
+        filters += f"[0:a]volume=1.0,{audio_chain}[a]"
     cmd2 += ["-filter_complex", filters, "-map", "[v]", "-map", "[a]",
              "-t", f"{args.target}", "-c:v", "libx264", "-preset", "veryfast",
              "-crf", str(args.crf), "-c:a", "aac", "-b:a", "192k",
