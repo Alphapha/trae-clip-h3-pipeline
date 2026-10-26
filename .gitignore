@@ -11,3 +11,6 @@ video/_qc/
 __pycache__/
 *.pyc
 .DS_Store
+
+# ASR 质检用虚拟环境
+.venv-asr/

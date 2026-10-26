@@ -34,6 +34,7 @@ trae-剪辑-autodl-skill/
 │   ├── gen_shots.py       # H3 Ref2VA 批量出分镜视频
 │   ├── gen_tts.py         # 备用配音（edge-tts），H3 原生对白不可用时启用
 │   ├── qc_shots.py        # 分镜质检：时长/画幅/音轨 + 抽帧拼图
+│   ├── qc_asr.py          # 对白质检：本地 ASR 转写音轨，与提示词台词逐镜比对
 │   └── build_final.py     # ffmpeg 合成 10 分钟成片
 ├── video/                 # 成片与中间产物
 │   ├── shots/S01.mp4 …    # 单镜视频
@@ -81,10 +82,10 @@ detailed_description / overall_soundscape / non_diegetic_music`，叙述用简�
 
 ```bash
 # 单镜试跑（先看效果再批量）
-python3 scripts/gen_shots.py --only S01 --steps 8 --width 320 --height 576
+python3 scripts/gen_shots.py --only S01 --steps 8 --width 432 --height 768
 
 # 全量（本项目定稿参数）
-python3 scripts/gen_shots.py --steps 8 --width 320 --height 576 --free-each \
+python3 scripts/gen_shots.py --steps 8 --width 432 --height 768 --free-each \
     --deadline 2026-10-27T08:25:00 --order "$(cat logs/order.txt)"
 
 # 设置早班截止时间，到点自动收工
@@ -96,7 +97,7 @@ python3 scripts/gen_shots.py --deadline 2026-10-27T07:30:00
 | 参数 | 说明 |
 | --- | --- |
 | `--steps` | 采样步数。官方模板 20 步；本项目定稿 8 步（蒸馏 int8 模型，8 步画质可用且提速 2.5 倍） |
-| `--width/--height` | 画布。H3 原生短边 768、上限 768×1344；本项目定稿 320×576（严格 9:16，成片阶段再上采样到 1080×1920） |
+| `--width/--height` | 画布。H3 原生短边 768、上限 768×1344；本项目定稿 432×768（严格 9:16，成片阶段再上采样到 1080×1920） |
 | `--ref-size` | 参考图策略：`match`（快，默认）/ `max`（身份保真更好但慢数倍） |
 | `--free-each` | 每镜前调 `/free` 清空显存（见「显存与速度」一节） |
 | `--order` | 生成优先顺序（逗号分隔镜头 id）。时间不够时先出剧本重点镜头，合成时仍按片号排序 |
@@ -129,8 +130,17 @@ H3 在 24GB 单卡上的瓶颈不是算力而是**显存驻留与注意力长度
 ### 5. 质检
 
 ```bash
-python3 scripts/qc_shots.py              # 逐镜查时长/画幅/音轨，并抽首中尾三帧到 video/_qc
+# 画面与音轨质检：逐镜查时长/画幅/音轨，并抽首中尾三帧到 video/_qc
+python3 scripts/qc_shots.py
+
+# 对白质检：用本地 ASR 把 H3 原生音轨转写，和提示词里的台词逐镜对照
+python3 -m venv .venv-asr && .venv-asr/bin/pip install faster-whisper
+HF_ENDPOINT=https://hf-mirror.com .venv-asr/bin/python scripts/qc_asr.py
 ```
+
+`qc_asr.py` 是「声音一致性」的验收关：H3 的对白是原生生成的，只有把音轨转写出来
+和台词比对，才能确认不是「有声音但没说对」的哑片。实测 tiny 模型也能把
+「两米二整，一分不差」转成「良米二整 一分補插」这类同音字，说明人耳听到的是对的台词。
 
 ### 6. 合成成片
 
@@ -185,7 +195,7 @@ H3 是原生音视频联合生成，对白在提示词的 `<d>[Chinese]…</d>` 
 
 **Q4：一镜太慢，来不及出 10 分钟？**
 先测速（`--only S01`），再按「总帧数 × 步数 × 像素」估算。提速顺序：
-降步数 12→8 → 降分辨率 480×832→432×768 → 减镜数。每镜约 20–40 秒的固定开销
+降步数 12→8 → 降分辨率 432×768→320×576 → 减镜数。每镜约 40–110 秒的固定开销
 （模型加载 + 解码），镜数越少越省。
 
 **Q5：成片比 10 分钟短/长？**
@@ -207,7 +217,7 @@ ffmpeg 5+ 通用。若本机 ffmpeg 路径不同，改 `scripts/build_final.py` 
 `scripts/qc_shots.py` 顶部的 `FFMPEG` / `FFPROBE` 常量。
 
 **Q9：一镜要 3 分钟，怎么压到 10 分钟成片？**
-按优先级依次调：① `--steps` 8→6；② `--width/--height` 320×576→288×512；
+按优先级依次调：① `--steps` 8→6；② `--width/--height` 432×768→320×576；
 ③ 缩短单镜帧数（`--frames`，但注意每帧成本会随帧数超线性上升）；
 ④ 减少镜数（每镜固定开销约 40–80s：模型加载 + VAE 解码）。
 先跑 `--only S01 --frames 124 --tag probe` 测速，再按「总帧数 × 步数 × 像素」估算总时长。

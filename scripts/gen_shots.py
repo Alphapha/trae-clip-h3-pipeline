@@ -158,6 +158,7 @@ def main() -> int:
         free_memory()
 
     total_frames = 0
+    plan_frames = sum((args.frames or m["frames"]) for m in todo)
     t_start = time.time()
     for i, m in enumerate(todo, start=1):
         dest = SHOT_DIR / f"{m['id']}.mp4"
@@ -192,7 +193,7 @@ def main() -> int:
             cost = time.time() - t0
             total_frames += frames
             done_frames = sum((args.frames or x["frames"]) for x in todo[:i])
-            eta = (time.time() - t_start) / max(done_frames, 1) * (total_frames - done_frames)
+            eta = (time.time() - t_start) / max(done_frames, 1) * max(plan_frames - done_frames, 0)
             print(f"\n    -> {dest.name} ({dest.stat().st_size//1024} KB, {int(cost)}s, "
                   f"预计剩余 {eta/60:.0f} 分钟)")
         except Exception as e:  # noqa: BLE001 - 单镜失败继续下一镜
