@@ -16,6 +16,7 @@ import argparse
 import json
 import subprocess
 import sys
+from typing import Optional
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -58,6 +59,32 @@ def grab_frames(path: Path, out_prefix: Path, times: list) -> list:
         if r.returncode == 0 and dest.exists():
             files.append(dest)
     return files
+
+
+def make_contact_sheet(shot_ids: list) -> Optional[Path]:
+    """把所有分镜的中间帧拼成一张总览图，方便一眼检查人物一致性。"""
+    from PIL import Image
+
+    cols, cw, ch = 6, 180, 320
+    tiles = []
+    for sid in shot_ids:
+        frames = sorted(QC_DIR.glob(f"{sid}_*.jpg"))
+        if len(frames) < 2:
+            continue
+        try:
+            im = Image.open(frames[1]).convert("RGB").resize((cw, ch))
+        except Exception:  # noqa: BLE001 - 单帧损坏不影响拼图
+            continue
+        tiles.append(im)
+    if not tiles:
+        return None
+    rows = (len(tiles) + cols - 1) // cols
+    sheet = QC_DIR / "总览拼图.jpg"
+    canvas = Image.new("RGB", (cols * cw, rows * ch), (20, 20, 20))
+    for i, im in enumerate(tiles):
+        canvas.paste(im, ((i % cols) * cw, (i // cols) * ch))
+    canvas.save(sheet, quality=88)
+    return sheet
 
 
 def main() -> int:
@@ -105,6 +132,10 @@ def main() -> int:
     (QC_DIR / "report.json").write_text(
         json.dumps([{k: v for k, v in i.items()} for _, i in report if i],
                    ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.contact_sheet:
+        sheet = make_contact_sheet([sid for sid, i in report if i])
+        if sheet:
+            print(f"总览拼图 -> {sheet}")
     if problems:
         print("\n问题：")
         for p in problems:
