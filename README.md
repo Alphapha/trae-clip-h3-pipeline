@@ -81,10 +81,11 @@ detailed_description / overall_soundscape / non_diegetic_music`，叙述用简�
 
 ```bash
 # 单镜试跑（先看效果再批量）
-python3 scripts/gen_shots.py --only S01 --steps 12 --width 480 --height 832
+python3 scripts/gen_shots.py --only S01 --steps 8 --width 320 --height 576
 
-# 全量（按 manifest 顺序，跳过已存在的）
-python3 scripts/gen_shots.py --steps 12 --width 480 --height 832 --free-memory
+# 全量（本项目定稿参数）
+python3 scripts/gen_shots.py --steps 8 --width 320 --height 576 --free-each \
+    --deadline 2026-10-27T08:25:00 --order "$(cat logs/order.txt)"
 
 # 设置早班截止时间，到点自动收工
 python3 scripts/gen_shots.py --deadline 2026-10-27T07:30:00
@@ -94,26 +95,58 @@ python3 scripts/gen_shots.py --deadline 2026-10-27T07:30:00
 
 | 参数 | 说明 |
 | --- | --- |
-| `--steps` | 采样步数。官方模板 20 步；本项目默认 12 步（速度与画质折中） |
-| `--width/--height` | 画布。H3 原生短边 768、上限 768×1344；本项目默认 480×832（9:16，比例一致、体积更省） |
+| `--steps` | 采样步数。官方模板 20 步；本项目定稿 8 步（蒸馏 int8 模型，8 步画质可用且提速 2.5 倍） |
+| `--width/--height` | 画布。H3 原生短边 768、上限 768×1344；本项目定稿 320×576（严格 9:16，成片阶段再上采样到 1080×1920） |
 | `--ref-size` | 参考图策略：`match`（快，默认）/ `max`（身份保真更好但慢数倍） |
+| `--free-each` | 每镜前调 `/free` 清空显存（见「显存与速度」一节） |
+| `--order` | 生成优先顺序（逗号分隔镜头 id）。时间不够时先出剧本重点镜头，合成时仍按片号排序 |
+| `--frames` / `--tag` | 覆盖帧长与输出文件名后缀，用于测速探针 |
 | `--force` | 已存在的分镜也重跑 |
 | `--no-audio` | 不生成音轨（用于验证画面） |
+| `--deadline` | 截止时间，之后不再提交新镜头（已提交的那一镜仍会跑完） |
 
-### 4. 质检
+### 4. 显存与速度（实测，重要）
+
+H3 在 24GB 单卡上的瓶颈不是算力而是**显存驻留与注意力长度**，两条实测结论：
+
+1. **不要用 `--lowvram` 启动 ComfyUI。** 20GB 的 int8 DiT 在该模式下按层 offload，
+   单步多耗 7%–40%，且每个新任务要额外 ~200s 重新加载。默认启动即可。
+2. **单步耗时随帧数超线性增长**（注意力在所有潜帧上展开），单镜越短越划算：
+
+   | 画布 | 帧数 | 步数 | 单步耗时 | 每帧·步 |
+   | --- | --- | --- | --- | --- |
+   | 480×832 | 124 | 12 | 8.9s | 0.072s |
+   | 480×832 | 311 | 12 | 38.1s | 0.123s |
+   | 432×768 | 311 | 8 | 29.7s | 0.119s |
+   | 320×576 | 311 | 8 | 11.4s | 0.046s |
+
+   也就是说 311 帧的每帧成本约为 124 帧的 **1.7 倍**。要同样的总时长，
+   应优先「多镜短片」而不是「少镜长片」。本项目 47 镜 × 311 帧（12.96s）是折中点。
+
+3. **文本编码器与 DiT 无法同时常驻**（15.7GB + 20GB > 24GB），`--free-each` 让每个任务
+   从干净显存开始，采样时 DiT 才能完整驻留。单镜实测 167–205s（含加载与解码）。
+
+### 5. 质检
 
 ```bash
 python3 scripts/qc_shots.py              # 逐镜查时长/画幅/音轨，并抽首中尾三帧到 video/_qc
 ```
 
-### 5. 合成成片
+### 6. 合成成片
 
 ```bash
 python3 scripts/build_final.py --out video/身高差_10分钟成片.mp4 --target 600
 ```
 
-合成会：统一到 1080×1920 / 24fps / yuv420p；叠一条 -42dB 的连续粉红噪房间底噪，
-让切点之间的房间声不断；结尾 2 秒淡出；总时长精确对齐 `--target`（默认 600 秒）。
+合成分三步（`scripts/build_final.py`）：
+
+1. **统一画幅**：统计各分镜分辨率，把不一致的（测速镜可能是 480×832 / 432×768）
+   统一转成主流分辨率，参数一致后才能安全拼接（concat 解复用器要求流参数相同）；
+2. **拼接**：concat 解复用器 + 流拷贝，不重编码；
+3. **成片输出**：上采样到 1080×1920 / 24fps / yuv420p，叠一条极低的粉红噪房间底噪
+   （让切点之间的房间声不断），结尾 2 秒淡出，总时长精确对齐 `--target`（默认 600 秒）。
+
+常用参数：`--target`（目标秒数）、`--no-ambience`（不叠底噪）、`--crf`（画质，默认 18）。
 
 ## 三、注意事项
 
@@ -172,3 +205,22 @@ H3 有时会自己加字幕。在提示词里加「画面中不得出现任何�
 本项目用 `scale/crop/fps/format/aresample/aformat/volume/amix/anoisesrc/fade`，
 ffmpeg 5+ 通用。若本机 ffmpeg 路径不同，改 `scripts/build_final.py` 与
 `scripts/qc_shots.py` 顶部的 `FFMPEG` / `FFPROBE` 常量。
+
+**Q9：一镜要 3 分钟，怎么压到 10 分钟成片？**
+按优先级依次调：① `--steps` 8→6；② `--width/--height` 320×576→288×512；
+③ 缩短单镜帧数（`--frames`，但注意每帧成本会随帧数超线性上升）；
+④ 减少镜数（每镜固定开销约 40–80s：模型加载 + VAE 解码）。
+先跑 `--only S01 --frames 124 --tag probe` 测速，再按「总帧数 × 步数 × 像素」估算总时长。
+
+**Q10：时间不够，如何先出重点镜头？**
+`--order "S01,S02,...,S16,S46,S47"` 让生成顺序与片号顺序解耦：合成时仍按
+`prompts/manifest.json` 的片号排序，所以时间不够时也是一部完整有头有尾的片子。
+
+**Q11：合成时报错 / 成片花屏？**
+多半是分镜分辨率或帧率不一致。`build_final.py` 会自动把分辨率不一致的分镜统一转码；
+若是帧率不同，把 `scripts/build_final.py` 里的 `FPS` 与分镜保持一致即可。
+
+**Q12：怎样确认 ComfyUI 启动参数是对的？**
+`curl -s http://x3090:8188/system_stats` 看版本；启动日志里
+`Set vram state to: NORMAL_VRAM` 且**没有** `--lowvram`。启动命令：
+`python main.py --listen 0.0.0.0 --port 8188`。
